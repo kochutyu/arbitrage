@@ -1,7 +1,8 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import { getArbitrageOpportunities } from './services/arbitrageService.js';
-import type { ErrorResponse, HealthResponse } from './types/api.js';
+import { exchanges } from './services/exchangeConfigs.js';
+import type { ErrorResponse, ExchangesResponse, HealthResponse } from './types/api.js';
 import type { ArbitrageOpportunity } from './types/exchange.js';
 
 const app = express();
@@ -42,6 +43,11 @@ app.get(
     }
   }
 );
+
+app.get('/api/exchanges', (_req: Request, res: Response<ExchangesResponse>) => {
+  const names = exchanges.map((exchange) => exchange.name);
+  res.json(names);
+});
 
 // Basic error middleware keeps error formatting consistent
 app.use((error: unknown, _req: Request, res: Response<ErrorResponse>, _next: NextFunction) => {

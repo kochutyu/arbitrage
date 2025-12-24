@@ -12,3 +12,5 @@ export interface ErrorResponse {
   error: string;
   details?: string;
 }
+
+export type ExchangesResponse = string[];
