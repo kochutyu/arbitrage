@@ -40,6 +40,41 @@ const binance: ExchangeConfig = {
         .filter((price) => pairs.includes(price.symbol))
         .map((price) => [price.symbol, Number(price.price)])
     );
+  },
+  async getTickers24h(pairs: string[]) {
+    const { data } = await client.get<Binance24hTicker[]>('https://api.binance.com/api/v3/ticker/24hr');
+    const tickers = Array.isArray(data) ? data : [];
+    return Object.fromEntries(
+      tickers
+        .filter((t) => pairs.includes(t.symbol))
+        .map((t) => [
+          t.symbol,
+          {
+            last: Number(t.lastPrice),
+            quoteVolume24h: Number(t.quoteVolume)
+          }
+        ])
+    );
+  },
+  async getOrderBook(symbol: string) {
+    const { data } = await client.get<BinanceDepthResponse>(
+      `https://api.binance.com/api/v3/depth?symbol=${encodeURIComponent(symbol)}&limit=500`
+    );
+    const bidsRaw = Array.isArray((data as BinanceDepthResponse | undefined)?.bids)
+      ? ((data as BinanceDepthResponse).bids ?? [])
+      : [];
+    const asksRaw = Array.isArray((data as BinanceDepthResponse | undefined)?.asks)
+      ? ((data as BinanceDepthResponse).asks ?? [])
+      : [];
+    const bids = bidsRaw
+      .map(([p, q]) => [Number(p), Number(q)] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => b[0] - a[0]);
+    const asks = asksRaw
+      .map(([p, q]) => [Number(p), Number(q)] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => a[0] - b[0]);
+    return { bids, asks };
   }
 };
 
@@ -119,6 +154,48 @@ const okx: ExchangeConfig = {
         .map((ticker) => [ticker.instId.replace('-', ''), Number(ticker.last)] as const)
         .filter(([symbol]) => pairs.includes(symbol))
     );
+  },
+  async getTickers24h(pairs: string[]) {
+    const { data } = await client.get<OkxTickersResponse>(
+      'https://www.okx.com/api/v5/market/tickers?instType=SPOT'
+    );
+    const tickers = Array.isArray((data as OkxTickersResponse | undefined)?.data)
+      ? (data as OkxTickersResponse).data
+      : [];
+    const entries: [string, { last?: number; quoteVolume24h?: number }][] = [];
+    for (const t of tickers) {
+      const symbol = t.instId.replace('-', '');
+      if (!pairs.includes(symbol)) continue;
+      const last = Number(t.last);
+      const vol = Number((t as OkxTickerExtended).volCcy24h);
+      const out: { last?: number; quoteVolume24h?: number } = {};
+      if (Number.isFinite(last)) out.last = last;
+      if (Number.isFinite(vol)) out.quoteVolume24h = vol;
+      if (out.last !== undefined || out.quoteVolume24h !== undefined) {
+        entries.push([symbol, out]);
+      }
+    }
+    return Object.fromEntries(entries);
+  },
+  async getOrderBook(symbol: string) {
+    const instId = okxInstId(symbol);
+    const { data } = await client.get<OkxBooksResponse>(
+      `https://www.okx.com/api/v5/market/books?instId=${encodeURIComponent(instId)}&sz=200`
+    );
+    const first = Array.isArray((data as OkxBooksResponse | undefined)?.data)
+      ? (data as OkxBooksResponse).data?.[0]
+      : undefined;
+    const bidsRaw = Array.isArray(first?.bids) ? first!.bids! : [];
+    const asksRaw = Array.isArray(first?.asks) ? first!.asks! : [];
+    const bids = bidsRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => b[0] - a[0]);
+    const asks = asksRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => a[0] - b[0]);
+    return { bids, asks };
   }
 };
 
@@ -156,6 +233,44 @@ const bybit: ExchangeConfig = {
         .map((ticker) => [ticker.symbol, Number(ticker.lastPrice)] as const)
         .filter(([symbol]) => pairs.includes(symbol))
     );
+  },
+  async getTickers24h(pairs: string[]) {
+    const { data } = await client.get<BybitTickersResponse>(
+      'https://api.bybit.com/v5/market/tickers?category=spot'
+    );
+    const tickers = Array.isArray((data as BybitTickersResponse | undefined)?.result?.list)
+      ? (data as BybitTickersResponse).result.list
+      : [];
+    const entries: [string, { last?: number; quoteVolume24h?: number }][] = [];
+    for (const t of tickers) {
+      if (!pairs.includes(t.symbol)) continue;
+      const last = Number(t.lastPrice);
+      const vol = Number((t as BybitTickerExtended).turnover24h);
+      const out: { last?: number; quoteVolume24h?: number } = {};
+      if (Number.isFinite(last)) out.last = last;
+      if (Number.isFinite(vol)) out.quoteVolume24h = vol;
+      if (out.last !== undefined || out.quoteVolume24h !== undefined) {
+        entries.push([t.symbol, out]);
+      }
+    }
+    return Object.fromEntries(entries);
+  },
+  async getOrderBook(symbol: string) {
+    const { data } = await client.get<BybitOrderBookResponse>(
+      `https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${encodeURIComponent(symbol)}&limit=200`
+    );
+    const result = (data as BybitOrderBookResponse | undefined)?.result;
+    const bidsRaw = Array.isArray(result?.b) ? result!.b! : [];
+    const asksRaw = Array.isArray(result?.a) ? result!.a! : [];
+    const bids = bidsRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => b[0] - a[0]);
+    const asks = asksRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => a[0] - b[0]);
+    return { bids, asks };
   }
 };
 
@@ -306,6 +421,89 @@ const kucoin: ExchangeConfig = {
         })
         .filter((entry): entry is [string, number] => Boolean(entry))
     );
+  },
+  async getTickers24h(pairs: string[]) {
+    const { data } = await client.get<KucoinTickersResponse>(
+      'https://api.kucoin.com/api/v1/market/allTickers'
+    );
+    const tickers = Array.isArray((data as KucoinTickersResponse | undefined)?.data?.ticker)
+      ? (data as KucoinTickersResponse).data!.ticker
+      : [];
+    const entries: [string, { last?: number; quoteVolume24h?: number }][] = [];
+    for (const t of tickers) {
+      const symbol = normalizeSymbolFromKucoin(t.symbol);
+      if (!symbol || !pairs.includes(symbol)) continue;
+      const last = Number(t.last);
+      const vol = Number((t as KucoinTickerEntryExtended).volValue);
+      const out: { last?: number; quoteVolume24h?: number } = {};
+      if (Number.isFinite(last)) out.last = last;
+      if (Number.isFinite(vol)) out.quoteVolume24h = vol;
+      if (out.last !== undefined || out.quoteVolume24h !== undefined) {
+        entries.push([symbol, out]);
+      }
+    }
+    return Object.fromEntries(entries);
+  },
+  async getOrderBook(symbol: string) {
+    const kucoinSymbol = kucoinSymbolFromNormalized(symbol);
+    if (!kucoinSymbol) return null;
+    const { data } = await client.get<KucoinOrderBookResponse>(
+      `https://api.kucoin.com/api/v1/market/orderbook/level2_100?symbol=${encodeURIComponent(kucoinSymbol)}`
+    );
+    const book = (data as KucoinOrderBookResponse | undefined)?.data;
+    const bidsRaw = Array.isArray(book?.bids) ? book!.bids! : [];
+    const asksRaw = Array.isArray(book?.asks) ? book!.asks! : [];
+    const bids = bidsRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => b[0] - a[0]);
+    const asks = asksRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => a[0] - b[0]);
+    return { bids, asks };
+  },
+  async getCurrencies() {
+    // NOTE: KuCoin provides a public currencies endpoint with chain status.
+    // If this endpoint becomes authenticated, return null and let validation conservatively skip.
+    try {
+      // v3 includes chain/network data; v1 lacks `chains`.
+      const { data } = await client.get<KucoinCurrenciesResponse>('https://api.kucoin.com/api/v3/currencies');
+      const list: KucoinCurrency[] = Array.isArray((data as KucoinCurrenciesResponse | undefined)?.data)
+        ? ((data as KucoinCurrenciesResponse).data ?? [])
+        : [];
+      const result: Record<
+        string,
+        { code: string; networks?: { network: string; depositEnabled?: boolean; withdrawEnabled?: boolean }[] }
+      > = {};
+      for (const c of list) {
+        const code = (c.currency ?? '').toUpperCase();
+        if (!code) continue;
+        const networks = Array.isArray(c.chains)
+          ? (c.chains
+              .map((ch) => {
+                const network = (ch.chainName ?? ch.chain ?? '').toUpperCase();
+                if (!network) return null;
+                return {
+                  network,
+                  depositEnabled: Boolean(ch.isDepositEnabled),
+                  withdrawEnabled: Boolean(ch.isWithdrawEnabled)
+                };
+              })
+              .filter(Boolean) as { network: string; depositEnabled?: boolean; withdrawEnabled?: boolean }[])
+          : null;
+        const entry: {
+          code: string;
+          networks?: { network: string; depositEnabled?: boolean; withdrawEnabled?: boolean }[];
+        } = { code };
+        if (networks && networks.length > 0) entry.networks = networks;
+        result[code] = entry;
+      }
+      return result;
+    } catch (error) {
+      console.warn('kucoin getCurrencies unavailable:', toErrorMessage(error));
+      return null;
+    }
   }
 };
 
@@ -537,6 +735,81 @@ const huobi: ExchangeConfig = {
         })
         .filter((entry): entry is [string, number] => Boolean(entry))
     );
+  },
+  async getTickers24h(pairs: string[]) {
+    const { data } = await client.get<HuobiTickersResponse>('https://api.huobi.pro/market/tickers');
+    const tickers: HuobiTickerExtended[] = Array.isArray((data as HuobiTickersResponse | undefined)?.data)
+      ? ((data as HuobiTickersResponse).data as HuobiTickerExtended[])
+      : [];
+    const entries: [string, { last?: number; quoteVolume24h?: number }][] = [];
+    for (const t of tickers) {
+      const symbol = (t.symbol ?? '').toUpperCase();
+      if (!pairs.includes(symbol)) continue;
+      const last = Number(t.close);
+      const vol = Number((t as HuobiTickerExtended).vol);
+      const out: { last?: number; quoteVolume24h?: number } = {};
+      if (Number.isFinite(last)) out.last = last;
+      if (Number.isFinite(vol)) out.quoteVolume24h = vol;
+      if (out.last !== undefined || out.quoteVolume24h !== undefined) {
+        entries.push([symbol, out]);
+      }
+    }
+    return Object.fromEntries(entries);
+  },
+  async getOrderBook(symbol: string) {
+    const huobiSymbol = symbol.toLowerCase();
+    const { data } = await client.get<HuobiDepthResponse>(
+      `https://api.huobi.pro/market/depth?symbol=${encodeURIComponent(huobiSymbol)}&type=step0`
+    );
+    const tick = (data as HuobiDepthResponse | undefined)?.tick;
+    const bidsRaw = Array.isArray(tick?.bids) ? tick!.bids! : [];
+    const asksRaw = Array.isArray(tick?.asks) ? tick!.asks! : [];
+    const bids = bidsRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => b[0] - a[0]);
+    const asks = asksRaw
+      .map((lvl) => [Number(lvl[0]), Number(lvl[1])] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => a[0] - b[0]);
+    return { bids, asks };
+  },
+  async getCurrencies() {
+    // NOTE: Relies on a public reference endpoint. If it becomes restricted, return null.
+    try {
+      const { data } = await client.get<HuobiCurrenciesResponse>('https://api.huobi.pro/v2/reference/currencies');
+      const list: HuobiCurrency[] = Array.isArray((data as HuobiCurrenciesResponse | undefined)?.data)
+        ? ((data as HuobiCurrenciesResponse).data ?? [])
+        : [];
+      const result: Record<
+        string,
+        { code: string; networks?: { network: string; depositEnabled?: boolean; withdrawEnabled?: boolean }[] }
+      > = {};
+      for (const c of list) {
+        const code = (c.currency ?? '').toUpperCase();
+        if (!code) continue;
+        const chains = Array.isArray(c.chains) ? c.chains : [];
+        const networks = chains
+          .map((ch) => {
+            const network = (ch.displayName ?? ch.chain ?? '').toUpperCase();
+            if (!network) return null;
+            const depositEnabled = String(ch.depositStatus ?? '').toLowerCase() === 'allowed';
+            const withdrawEnabled = String(ch.withdrawStatus ?? '').toLowerCase() === 'allowed';
+            return { network, depositEnabled, withdrawEnabled };
+          })
+          .filter(Boolean) as { network: string; depositEnabled?: boolean; withdrawEnabled?: boolean }[];
+        const entry: {
+          code: string;
+          networks?: { network: string; depositEnabled?: boolean; withdrawEnabled?: boolean }[];
+        } = { code };
+        if (networks.length > 0) entry.networks = networks;
+        result[code] = entry;
+      }
+      return result;
+    } catch (error) {
+      console.warn('huobi getCurrencies unavailable:', toErrorMessage(error));
+      return null;
+    }
   }
 };
 
@@ -572,6 +845,55 @@ const upbit: ExchangeConfig = {
         })
         .filter((entry): entry is [string, number] => Boolean(entry))
     );
+  },
+  async getTickers24h(pairs: string[]) {
+    if (Object.keys(upbitMarketLookup).length === 0) {
+      await loadUpbitPairs();
+    }
+    const markets = pairs.map((symbol) => upbitMarketLookup[symbol]).filter(Boolean);
+    if (markets.length === 0) return {};
+    const { data } = await client.get<UpbitTickerExtended[]>(
+      `https://api.upbit.com/v1/ticker?markets=${markets.join(',')}`
+    );
+    const tickers = Array.isArray(data) ? data : [];
+    const symbolByMarket = new Map<string, string>(
+      Object.entries(upbitMarketLookup).map(([symbol, market]) => [market, symbol])
+    );
+    const entries: [string, { last?: number; quoteVolume24h?: number }][] = [];
+    for (const t of tickers) {
+      const symbol = symbolByMarket.get(t.market ?? '');
+      if (!symbol) continue;
+      const last = Number(t.trade_price);
+      const vol = Number((t as UpbitTickerExtended).acc_trade_price_24h);
+      const out: { last?: number; quoteVolume24h?: number } = {};
+      if (Number.isFinite(last)) out.last = last;
+      if (Number.isFinite(vol)) out.quoteVolume24h = vol;
+      if (out.last !== undefined || out.quoteVolume24h !== undefined) {
+        entries.push([symbol, out]);
+      }
+    }
+    return Object.fromEntries(entries);
+  },
+  async getOrderBook(symbol: string) {
+    if (Object.keys(upbitMarketLookup).length === 0) {
+      await loadUpbitPairs();
+    }
+    const market = upbitMarketLookup[symbol];
+    if (!market) return null;
+    const { data } = await client.get<UpbitOrderBookEntry[]>(
+      `https://api.upbit.com/v1/orderbook?markets=${encodeURIComponent(market)}`
+    );
+    const first = Array.isArray(data) ? data[0] : undefined;
+    const units = Array.isArray(first?.orderbook_units) ? first!.orderbook_units : [];
+    const bids = units
+      .map((u) => [Number(u.bid_price), Number(u.bid_size)] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => b[0] - a[0]);
+    const asks = units
+      .map((u) => [Number(u.ask_price), Number(u.ask_size)] as const)
+      .filter(([p, q]) => Number.isFinite(p) && Number.isFinite(q) && p > 0 && q > 0)
+      .sort((a, b) => a[0] - b[0]);
+    return { bids, asks };
   }
 };
 
@@ -809,6 +1131,19 @@ function normalizeSymbolFromKucoin(id: string): string | null {
   return normalizeSymbol(base, quote);
 }
 
+function kucoinSymbolFromNormalized(symbol: string): string | null {
+  if (!symbol.endsWith(USDT)) return null;
+  const base = symbol.slice(0, -USDT.length);
+  if (!base) return null;
+  return `${base}-${USDT}`;
+}
+
+function okxInstId(symbol: string): string {
+  if (!symbol.endsWith(USDT)) return symbol;
+  const base = symbol.slice(0, -USDT.length);
+  return `${base}-${USDT}`;
+}
+
 async function loadBitfinexPairs(): Promise<Pair[]> {
   const { data } = await client.get<BitfinexPairListResponse>(
     'https://api-pub.bitfinex.com/v2/conf/pub:list:pair:exchange'
@@ -905,6 +1240,17 @@ interface BinancePrice {
   price: string;
 }
 
+interface Binance24hTicker {
+  symbol: string;
+  lastPrice: string;
+  quoteVolume: string;
+}
+
+interface BinanceDepthResponse {
+  bids?: [string, string][];
+  asks?: [string, string][];
+}
+
 interface OkxInstrument {
   baseCcy: string;
   quoteCcy: string;
@@ -916,12 +1262,25 @@ interface OkxTicker {
   last: string;
 }
 
+interface OkxTickerExtended extends OkxTicker {
+  volCcy24h?: string;
+}
+
 interface OkxInstrumentsResponse {
   data: OkxInstrument[];
 }
 
 interface OkxTickersResponse {
   data: OkxTicker[];
+}
+
+interface OkxBookEntry {
+  bids?: string[][];
+  asks?: string[][];
+}
+
+interface OkxBooksResponse {
+  data?: OkxBookEntry[];
 }
 
 interface BybitInstrument {
@@ -934,6 +1293,10 @@ interface BybitTicker {
   lastPrice: string;
 }
 
+interface BybitTickerExtended extends BybitTicker {
+  turnover24h?: string;
+}
+
 interface BybitInstrumentsResponse {
   result: {
     list: BybitInstrument[];
@@ -943,6 +1306,13 @@ interface BybitInstrumentsResponse {
 interface BybitTickersResponse {
   result: {
     list: BybitTicker[];
+  };
+}
+
+interface BybitOrderBookResponse {
+  result?: {
+    b?: string[][];
+    a?: string[][];
   };
 }
 
@@ -1010,8 +1380,35 @@ interface KucoinTickerEntry {
   last: string;
 }
 
+interface KucoinTickerEntryExtended extends KucoinTickerEntry {
+  volValue?: string;
+}
+
 interface KucoinTickersResponse {
   data?: { ticker: KucoinTickerEntry[] };
+}
+
+interface KucoinOrderBookResponse {
+  data?: {
+    bids?: string[][];
+    asks?: string[][];
+  };
+}
+
+interface KucoinCurrencyChain {
+  chainName?: string;
+  chain?: string;
+  isDepositEnabled?: boolean;
+  isWithdrawEnabled?: boolean;
+}
+
+interface KucoinCurrency {
+  currency?: string;
+  chains?: KucoinCurrencyChain[];
+}
+
+interface KucoinCurrenciesResponse {
+  data?: KucoinCurrency[];
 }
 
 interface BitgetSymbol {
@@ -1112,6 +1509,33 @@ interface HuobiTickersResponse {
   data?: HuobiTicker[];
 }
 
+interface HuobiTickerExtended extends HuobiTicker {
+  vol?: number;
+}
+
+interface HuobiDepthResponse {
+  tick?: {
+    bids?: number[][];
+    asks?: number[][];
+  };
+}
+
+interface HuobiCurrencyChain {
+  displayName?: string;
+  chain?: string;
+  depositStatus?: string;
+  withdrawStatus?: string;
+}
+
+interface HuobiCurrency {
+  currency?: string;
+  chains?: HuobiCurrencyChain[];
+}
+
+interface HuobiCurrenciesResponse {
+  data?: HuobiCurrency[];
+}
+
 interface UpbitMarket {
   market?: string;
 }
@@ -1119,6 +1543,21 @@ interface UpbitMarket {
 interface UpbitTicker {
   market?: string;
   trade_price?: number;
+}
+
+interface UpbitTickerExtended extends UpbitTicker {
+  acc_trade_price_24h?: number;
+}
+
+interface UpbitOrderBookUnit {
+  ask_price?: number;
+  ask_size?: number;
+  bid_price?: number;
+  bid_size?: number;
+}
+
+interface UpbitOrderBookEntry {
+  orderbook_units?: UpbitOrderBookUnit[];
 }
 
 interface BithumbTicker {
